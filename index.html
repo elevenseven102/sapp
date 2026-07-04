@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Hello PWA</title>
+
+  <!-- Подключаем манифест -->
+  <link rel="manifest" href="/manifest.json">
+
+  <!-- Метатеги для iOS: разрешаем полноэкранный режим и задаём иконку -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="apple-touch-icon" href="/icon-192.png">
+
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+      text-align: center;
+      padding-top: 80px;
+      background: #f0f0f5;
+    }
+    h1 { font-size: 2.5rem; }
+  </style>
+</head>
+<body>
+  <h1>👋 Привет, PWA!</h1>
+  <p>Это приложение работает даже без интернета.</p>
+
+  <script>
+    // Регистрируем сервис-воркер
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js')
+        .then(() => console.log('Service Worker зарегистрирован'))
+        .catch(err => console.error('Ошибка регистрации SW:', err));
+    }
+  </script>
+</body>
+</html>
