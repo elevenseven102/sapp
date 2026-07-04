@@ -34,112 +34,106 @@ function stopCamera() {
   }
 }
 
-// -------------------- JSFeat: обнаружение документа --------------------
-function findDocumentCorners(imageData) {
-  const { width, height, data } = imageData;
+// -------------------- Вспомогательные функции --------------------
+// Преобразование canvas в jsfeat.matrix_t (серый)
+function canvasToGrayMatrix(canvas) {
+  const ctx = canvas.getContext('2d');
+  const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  const mat = new jsfeat.matrix_t(canvas.width, canvas.height, jsfeat.U8C1_t);
+  jsfeat.imgproc.grayscale(imageData.data, canvas.width, canvas.height, mat);
+  return { mat, imageData };
+}
 
-  // 1. Переводим в серый
-  const gray = new jsfeat.matrix_t(width, height, jsfeat.U8C1_t);
-  jsfeat.imgproc.grayscale(data, width, height, gray);
-
-  // 2. Размытие
+// Поиск углов документа
+function findDocumentCorners(grayMat, width, height) {
+  // Размытие
   const blurred = new jsfeat.matrix_t(width, height, jsfeat.U8C1_t);
-  jsfeat.imgproc.gaussian_blur(gray, blurred, 5);
+  jsfeat.imgproc.gaussian_blur(grayMat, blurred, 5);
 
-  // 3. Поиск границ (Canny)
+  // Поиск границ (Canny)
   const edges = new jsfeat.matrix_t(width, height, jsfeat.U8C1_t);
   jsfeat.imgproc.canny(blurred, edges, 50, 150);
 
-  // 4. Ищем контуры
+  // Поиск контуров с помощью contour_finder
+  const contourFinder = new jsfeat.imgproc.contour_finder();
   const contours = [];
-  jsfeat.imgproc.findContours(edges, contours, (ctx, x, y, w, h) => {
-    // Игнорируем слишком маленькие области
+  contourFinder.findContours(edges, function(poly) {
+    // отбираем только замкнутые контуры с 4 углами
+    if (poly.length === 4) {
+      contours.push(poly.slice()); // копия массива точек
+    }
   });
 
-  // 5. Ищем самый большой четырёхугольник
-  let bestContour = null;
+  // Ищем контур с максимальной площадью
+  let best = null;
   let maxArea = 0;
-  const minArea = width * height * 0.05; // минимум 5% площади кадра
+  const minArea = width * height * 0.05;
 
-  for (let i = 0; i < contours.length; i++) {
-    const cnt = contours[i];
-    // Аппроксимируем контур полигоном
-    const poly = jsfeat.imgproc.approxPolyDP(cnt, 0.02 * jsfeat.imgproc.arcLength(cnt, true), true);
-    if (poly.length === 4) {
-      const area = jsfeat.imgproc.contourArea(poly);
-      if (area > minArea && area > maxArea) {
-        maxArea = area;
-        bestContour = poly;
-      }
+  for (const poly of contours) {
+    // jsfeat.imgproc.contourArea ожидает массив точек {x,y} или просто массив?
+    // Передадим как массив объектов {x,y}
+    const area = jsfeat.imgproc.contourArea(poly);
+    if (area > minArea && area > maxArea) {
+      maxArea = area;
+      best = poly;
     }
   }
 
-  if (!bestContour) {
-    statusDiv.textContent = 'Документ не найден, используем всё изображение.';
-    return null;
-  }
+  if (!best) return null;
 
-  // Приводим углы к формату [{x,y},...] и сортируем
-  let corners = bestContour.map(p => ({x: p.x, y: p.y}));
-  corners.sort((a, b) => (a.x + a.y) - (b.x + b.y));
-  const tl = corners[0];
-  const br = corners[3];
-  const tr = corners[1].x - corners[1].y > corners[2].x - corners[2].y ? corners[1] : corners[2];
-  const bl = corners[1] === tr ? corners[2] : corners[1];
-
+  // Сортируем углы: верхний-левый, верхний-правый, нижний-правый, нижний-левый
+  const pts = best.map(p => ({x: p.x, y: p.y}));
+  pts.sort((a, b) => (a.x + a.y) - (b.x + b.y));
+  const tl = pts[0];
+  const br = pts[3];
+  const tr = pts[1].x - pts[1].y > pts[2].x - pts[2].y ? pts[1] : pts[2];
+  const bl = pts[1] === tr ? pts[2] : pts[1];
   return [tl, tr, br, bl];
 }
 
-// Коррекция перспективы и улучшение
-function processWithCorners(sourceCanvas, corners) {
-  const srcW = sourceCanvas.width;
-  const srcH = sourceCanvas.height;
-  const srcCtx = sourceCanvas.getContext('2d');
-  const srcData = srcCtx.getImageData(0, 0, srcW, srcH);
+// Перспективная коррекция с помощью warp_perspective
+function warpCanvas(srcCanvas, corners) {
+  const srcW = srcCanvas.width;
+  const srcH = srcCanvas.height;
+  const srcCtx = srcCanvas.getContext('2d');
+  const srcImageData = srcCtx.getImageData(0, 0, srcW, srcH);
 
-  // Вычисляем размеры выходного изображения
+  // Входное изображение как матрица RGBA
+  const srcMat = new jsfeat.matrix_t(srcW, srcH, jsfeat.U8C4_t);
+  jsfeat.imgproc.imgDataToMatrix(srcImageData.data, srcMat);
+
+  // Размеры выходного изображения
   function dist(p1, p2) {
     return Math.sqrt((p2.x-p1.x)**2 + (p2.y-p1.y)**2);
   }
   const maxW = Math.round(Math.max(dist(corners[0], corners[1]), dist(corners[2], corners[3])));
   const maxH = Math.round(Math.max(dist(corners[0], corners[3]), dist(corners[1], corners[2])));
 
-  // Создаём пустое выходное изображение
+  // Исходные и целевые точки
+  const srcPts = [
+    corners[0].x, corners[0].y,
+    corners[1].x, corners[1].y,
+    corners[2].x, corners[2].y,
+    corners[3].x, corners[3].y
+  ];
+  const dstPts = [0, 0, maxW-1, 0, maxW-1, maxH-1, 0, maxH-1];
+
+  // Матрица преобразования
+  const transform = jsfeat.imgproc.getPerspectiveTransform(srcPts, dstPts);
+
+  // Применяем перспективное преобразование
+  const warpedMat = new jsfeat.matrix_t(maxW, maxH, jsfeat.U8C4_t);
+  jsfeat.imgproc.warp_perspective(srcMat, warpedMat, transform);
+
+  // Результат на canvas
   const outCanvas = document.createElement('canvas');
   outCanvas.width = maxW;
   outCanvas.height = maxH;
   const outCtx = outCanvas.getContext('2d');
-  const outData = outCtx.createImageData(maxW, maxH);
+  const outImageData = outCtx.createImageData(maxW, maxH);
+  jsfeat.imgproc.matrixToImgData(warpedMat, outImageData.data);
+  outCtx.putImageData(outImageData, 0, 0);
 
-  // Координаты углов исходного и целевого
-  const srcPts = [corners[0].x, corners[0].y, corners[1].x, corners[1].y,
-                  corners[2].x, corners[2].y, corners[3].x, corners[3].y];
-  const dstPts = [0, 0, maxW-1, 0, maxW-1, maxH-1, 0, maxH-1];
-
-  // Получаем матрицу перспективного преобразования через jsfeat
-  const transform = jsfeat.imgproc.getPerspectiveTransform(srcPts, dstPts);
-
-  // Применяем перспективное преобразование вручную (обратное проецирование)
-  for (let y = 0; y < maxH; y++) {
-    for (let x = 0; x < maxW; x++) {
-      // Применяем матрицу к точке (x, y) чтобы найти исходную позицию
-      const w = transform[6]*x + transform[7]*y + transform[8];
-      const srcX = (transform[0]*x + transform[1]*y + transform[2]) / w;
-      const srcY = (transform[3]*x + transform[4]*y + transform[5]) / w;
-
-      if (srcX >= 0 && srcX < srcW && srcY >= 0 && srcY < srcH) {
-        const ix = Math.floor(srcX);
-        const iy = Math.floor(srcY);
-        const idx = (iy * srcW + ix) * 4;
-        const outIdx = (y * maxW + x) * 4;
-        outData.data[outIdx] = srcData.data[idx];
-        outData.data[outIdx+1] = srcData.data[idx+1];
-        outData.data[outIdx+2] = srcData.data[idx+2];
-        outData.data[outIdx+3] = 255;
-      }
-    }
-  }
-  outCtx.putImageData(outData, 0, 0);
   return outCanvas;
 }
 
@@ -149,7 +143,7 @@ function applyScannerEffect(canvas) {
   const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
   const d = imageData.data;
 
-  // Сначала в серый и собираем гистограмму
+  // В серый + гистограмма
   const hist = new Array(256).fill(0);
   for (let i = 0; i < d.length; i += 4) {
     const gray = 0.299 * d[i] + 0.587 * d[i+1] + 0.114 * d[i+2];
@@ -157,17 +151,15 @@ function applyScannerEffect(canvas) {
     hist[Math.round(gray)]++;
   }
 
-  // Автоуровни: отсекаем 2% тёмных и 2% светлых пикселей
+  // Автоуровни: отсекаем 2% с краёв
   let low = 0, high = 255;
   let sum = 0;
-  const total = (d.length / 4);
+  const total = d.length / 4;
   for (let i = 0; i < 256; i++) {
     sum += hist[i];
     if (sum < total * 0.02) low = i;
     if (sum > total * 0.98) { high = i; break; }
   }
-
-  // Применяем растяжение
   const range = high - low || 1;
   for (let i = 0; i < d.length; i += 4) {
     let val = d[i];
@@ -184,23 +176,22 @@ async function scanFromImage(imgElement) {
   outputCanvas.style.display = 'none';
   overlayCtx.clearRect(0, 0, overlay.width, overlay.height);
 
-  // Кладём изображение на временный canvas (уже в натуральную величину)
+  // Кладём изображение на временный canvas
   const srcCanvas = document.createElement('canvas');
   srcCanvas.width = imgElement.naturalWidth || imgElement.videoWidth || imgElement.width;
   srcCanvas.height = imgElement.naturalHeight || imgElement.videoHeight || imgElement.height;
   const srcCtx = srcCanvas.getContext('2d');
   srcCtx.drawImage(imgElement, 0, 0, srcCanvas.width, srcCanvas.height);
 
-  // Получаем ImageData для JSFeat
-  const imageData = srcCtx.getImageData(0, 0, srcCanvas.width, srcCanvas.height);
+  // Получаем серую матрицу и ищем углы
+  const { mat: grayMat } = canvasToGrayMatrix(srcCanvas);
+  const corners = findDocumentCorners(grayMat, srcCanvas.width, srcCanvas.height);
 
-  // Ищем углы документа
-  const corners = findDocumentCorners(imageData);
   let processedCanvas;
-
   if (corners) {
-    processedCanvas = processWithCorners(srcCanvas, corners);
-    // Рисуем найденные углы на overlay (для визуальной обратной связи)
+    processedCanvas = warpCanvas(srcCanvas, corners);
+
+    // Рисуем контур на overlay (масштабируем)
     const scaleX = overlay.width / srcCanvas.width;
     const scaleY = overlay.height / srcCanvas.height;
     overlayCtx.strokeStyle = '#00ff00';
@@ -211,7 +202,8 @@ async function scanFromImage(imgElement) {
     overlayCtx.closePath();
     overlayCtx.stroke();
   } else {
-    processedCanvas = srcCanvas; // fallback
+    processedCanvas = srcCanvas; // fallback, если документ не найден
+    statusDiv.textContent = 'Документ не найден. Использовано всё изображение.';
   }
 
   // Применяем сканерный эффект
@@ -232,7 +224,6 @@ async function scanFromImage(imgElement) {
 // -------------------- Захват с камеры --------------------
 captureBtn.addEventListener('click', () => {
   if (!video.videoWidth) return;
-  // Создаём canvas с размерами видео
   const tempCanvas = document.createElement('canvas');
   tempCanvas.width = video.videoWidth;
   tempCanvas.height = video.videoHeight;
