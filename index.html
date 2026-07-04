@@ -2,38 +2,81 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Hello PWA</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+  <title>Сканер документов</title>
 
-  <!-- Подключаем манифест -->
   <link rel="manifest" href="/manifest.json">
-
-  <!-- Метатеги для iOS: разрешаем полноэкранный режим и задаём иконку -->
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <link rel="apple-touch-icon" href="/icon-192.png">
+  <link rel="apple-touch-icon" href="/icons/icon-192.png">
 
   <style>
     body {
+      margin: 0;
       font-family: -apple-system, BlinkMacSystemFont, sans-serif;
-      text-align: center;
-      padding-top: 80px;
-      background: #f0f0f5;
+      background: #000;
+      color: #fff;
+      display: flex;
+      flex-direction: column;
+      height: 100dvh;
+      overflow: hidden;
     }
-    h1 { font-size: 2.5rem; }
+    #controls {
+      padding: 12px;
+      text-align: center;
+      background: #111;
+    }
+    button, .file-label {
+      background: #007aff;
+      color: #fff;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 1rem;
+      margin: 4px;
+    }
+    input[type="file"] { display: none; }
+    #viewfinder {
+      flex: 1;
+      position: relative;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #222;
+      overflow: hidden;
+    }
+    video, canvas {
+      max-width: 100%;
+      max-height: 100%;
+    }
+    #outputCanvas {
+      display: none;   /* показать после сканирования */
+    }
+    #status {
+      font-size: 0.9rem;
+      margin-top: 8px;
+    }
   </style>
 </head>
 <body>
-  <h1>👋 Привет, PWA!</h1>
-  <p>Это приложение работает даже без интернета.</p>
+  <div id="viewfinder">
+    <video id="video" autoplay playsinline></video>
+    <canvas id="overlay" style="position:absolute; top:0; left:0; pointer-events:none;"></canvas>
+    <canvas id="outputCanvas"></canvas>
+  </div>
+  <div id="controls">
+    <button id="captureBtn">📷 Сканировать</button>
+    <label for="fileInput" class="file-label">🖼️ Из галереи</label>
+    <input type="file" id="fileInput" accept="image/*">
+    <button id="downloadPdfBtn" disabled>📄 Сохранить PDF</button>
+    <div id="status"></div>
+  </div>
 
-  <script>
-    // Регистрируем сервис-воркер
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.register('/sw.js')
-        .then(() => console.log('Service Worker зарегистрирован'))
-        .catch(err => console.error('Ошибка регистрации SW:', err));
-    }
-  </script>
+  <!-- OpenCV.js (загружается асинхронно) -->
+  <script async id="opencvScript" src="https://docs.opencv.org/master/opencv.js"></script>
+  <!-- jsPDF -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+  <script src="app.js"></script>
 </body>
 </html>
