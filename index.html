@@ -38,7 +38,7 @@
       display: none;
       z-index: 10;
     }
-    #overlay {
+    #overlayCanvas {
       z-index: 5;
       pointer-events: none;
     }
@@ -74,20 +74,22 @@
 <body>
   <div id="viewfinder">
     <video id="video" autoplay playsinline></video>
-    <canvas id="overlay"></canvas>
+    <canvas id="overlayCanvas"></canvas>
     <canvas id="outputCanvas"></canvas>
   </div>
   <div id="controls">
-    <button id="captureBtn">📷 Сканировать</button>
+    <button id="captureBtn" disabled>📷 Сканировать</button>
     <label for="fileInput" class="file-label">🖼️ Из галереи</label>
     <input type="file" id="fileInput" accept="image/*">
     <button id="downloadPdfBtn" disabled>📄 Сохранить PDF</button>
-    <div id="status">Загрузка...</div>
+    <div id="status">Загрузка библиотек...</div>
   </div>
 
-  <!-- JSFeat – суперлёгкая библиотека компьютерного зрения -->
-  <script src="https://cdn.jsdelivr.net/npm/jsfeat@0.0.8/build/jsfeat-min.js"></script>
-  <!-- jsPDF для генерации PDF -->
+  <!-- OpenCV 4.7.0 (асинхронно) -->
+  <script src="https://docs.opencv.org/4.7.0/opencv.js" async id="opencvScript"></script>
+  <!-- jscanify – обёртка над OpenCV для выделения документов -->
+  <script src="https://cdn.jsdelivr.net/gh/ColonelParrot/jscanify@master/src/jscanify.min.js"></script>
+  <!-- jsPDF -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
   <script src="app.js"></script>
