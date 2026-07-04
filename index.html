@@ -2,96 +2,114 @@
 <html lang="ru">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
   <title>Сканер документов</title>
+
+  <!-- PWA -->
   <link rel="manifest" href="/manifest.json">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="apple-touch-icon" href="/icons/icon-192.png">
+
   <style>
-    * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: -apple-system, sans-serif;
+      font-family: -apple-system, BlinkMacSystemFont, sans-serif;
       background: #000;
       color: #fff;
       display: flex;
       flex-direction: column;
-      height: 100dvh;
-      overflow: hidden;
-    }
-    #viewfinder {
-      flex: 1;
-      position: relative;
-      background: #111;
-      display: flex;
       align-items: center;
       justify-content: center;
-      overflow: hidden;
+      height: 100dvh;
+      text-align: center;
     }
-    video, canvas {
-      position: absolute;
-      max-width: 100%;
-      max-height: 100%;
-    }
-    #outputCanvas {
-      display: none;
-      z-index: 10;
-    }
-    #overlayCanvas {
-      z-index: 5;
-      pointer-events: none;
-    }
-    #controls {
-      padding: 12px;
-      background: #1a1a1a;
-      display: flex;
-      flex-wrap: wrap;
-      justify-content: center;
-      gap: 8px;
-    }
-    button, .file-label {
+    button {
       background: #0a84ff;
       border: none;
       color: white;
-      padding: 12px 20px;
-      border-radius: 12px;
-      font-size: 1rem;
-      font-weight: 500;
+      padding: 16px 32px;
+      border-radius: 16px;
+      font-size: 1.2rem;
+      font-weight: 600;
       cursor: pointer;
+      margin-top: 20px;
     }
-    button:disabled, .file-label:disabled { opacity: 0.5; pointer-events: none; }
-    input[type="file"] { display: none; }
+    button:disabled { opacity: 0.5; pointer-events: none; }
     #status {
-      width: 100%;
-      text-align: center;
-      font-size: 0.85rem;
+      margin-top: 20px;
+      font-size: 0.9rem;
       color: #aaa;
-      margin-top: 4px;
     }
   </style>
 </head>
 <body>
-  <div id="viewfinder">
-    <video id="video" autoplay playsinline></video>
-    <canvas id="overlayCanvas"></canvas>
-    <canvas id="outputCanvas"></canvas>
-  </div>
-  <div id="controls">
-    <button id="captureBtn" disabled>📷 Сканировать</button>
-    <label for="fileInput" class="file-label">🖼️ Из галереи</label>
-    <input type="file" id="fileInput" accept="image/*">
-    <button id="downloadPdfBtn" disabled>📄 Сохранить PDF</button>
-    <div id="status">Загрузка библиотек...</div>
-  </div>
+  <h1>📄 Сканер документов</h1>
+  <button id="scanButton">📷 Сканировать</button>
+  <div id="status">Инициализация SDK...</div>
 
-  <!-- OpenCV 4.7.0 (асинхронно) -->
-  <script src="https://docs.opencv.org/4.7.0/opencv.js" async id="opencvScript"></script>
-  <!-- jscanify – обёртка над OpenCV для выделения документов -->
-  <script src="https://cdn.jsdelivr.net/gh/ColonelParrot/jscanify@master/src/jscanify.min.js"></script>
-  <!-- jsPDF -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script type="module">
+    import "https://cdn.jsdelivr.net/npm/scanbot-web-sdk@7.0.0/bundle/ScanbotSDK.ui2.min.js";
 
-  <script src="app.js"></script>
+    // Инициализация SDK
+    const sdk = await ScanbotSDK.initialize({
+      enginePath: "https://cdn.jsdelivr.net/npm/scanbot-web-sdk@7.0.0/bundle/bin/complete/"
+    });
+
+    document.getElementById('scanButton').disabled = false;
+    document.getElementById('status').textContent = 'Готово. Нажмите «Сканировать».';
+
+    // Регистрация service worker для офлайн-кеширования
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('/sw.js');
+    }
+
+    // Обработчик сканирования
+    document.getElementById('scanButton').addEventListener('click', async () => {
+      try {
+        // Конфигурация UI сканирования (все настройки по умолчанию)
+        const config = new ScanbotSDK.UI.Config.DocumentScanningFlow();
+        
+        // Запуск интерфейса сканера
+        const scanResult = await ScanbotSDK.UI.createDocumentScanner(config);
+        const pages = scanResult?.document?.pages;
+
+        if (!pages || !pages.length) {
+          document.getElementById('status').textContent = 'Сканирование отменено.';
+          return;
+        }
+
+        // Генерация PDF
+        const options = {
+          pageSize: "A4",
+          pageDirection: "PORTRAIT",
+          pageFit: "FIT_IN",
+          dpi: 72,
+          jpegQuality: 80
+        };
+        const bytes = await scanResult.document.createPdf(options);
+
+        // Сохранение PDF
+        saveBytes(bytes, "scan.pdf");
+        document.getElementById('status').textContent = 'PDF сохранён.';
+      } catch (err) {
+        document.getElementById('status').textContent = 'Ошибка: ' + err.message;
+      }
+    });
+
+    // Вспомогательная функция сохранения файла
+    function saveBytes(data, name) {
+      const extension = name.split('.').pop();
+      const blob = new Blob([data], { type: `application/${extension}` });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+  </script>
 </body>
 </html>
