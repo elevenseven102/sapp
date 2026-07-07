@@ -1,0 +1,282 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CamScanner Downloader</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f9f9f9; }
+        .container { max-width: 1200px; margin: 0 auto; background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        button { padding: 8px 16px; margin: 5px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 4px; }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
+        .scan-list { display: flex; flex-direction: column; gap: 10px; margin-top: 20px; }
+        .scan-item { display: flex; align-items: center; justify-content: space-between; padding: 10px; background: #fff; border: 1px solid #ddd; border-radius: 6px; }
+        .scan-info { flex: 1; display: flex; align-items: center; gap: 15px; }
+        .scan-title { font-weight: bold; }
+        .scan-pages { color: #666; font-size: 0.9em; }
+        .scan-actions { display: flex; gap: 5px; }
+        .status { margin-top: 10px; color: #555; font-style: italic; }
+        .error { color: red; }
+        .progress { width: 100%; background: #eee; border-radius: 4px; margin-top: 10px; }
+        .progress-bar { height: 20px; background: #28a745; border-radius: 4px; width: 0%; transition: width 0.3s; text-align: center; color: white; line-height: 20px; }
+        .select-all { display: flex; align-items: center; gap: 5px; margin-bottom: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Мои сканы CamScanner</h1>
+        <div>
+            <button id="loadScansBtn">Загрузить список сканов</button>
+            <button id="downloadSelectedBtn" disabled>Скачать выбранные</button>
+            <button id="downloadAllBtn" disabled>Скачать все</button>
+        </div>
+        <div class="select-all">
+            <input type="checkbox" id="selectAllCheckbox" disabled> <label for="selectAllCheckbox">Выделить всё</label>
+        </div>
+        <div class="scan-list" id="scanList"></div>
+        <div class="status" id="status"></div>
+        <div class="progress" style="display: none;" id="progressContainer">
+            <div class="progress-bar" id="progressBar">0%</div>
+        </div>
+    </div>
+
+    <script>
+        // ===== НАСТРОЙКИ =====
+        const TOKEN = 'DBF3A652672640A4hS9PK7Wf02'; // ваш токен
+        const LIST_URL = '/sync/query_doc_list?filter_esign=1&isDomestic=false&order_type=0&token=' + TOKEN;
+        const IMAGE_URL_BASE = '/sync/enhance_jpg?token=' + TOKEN + '&rotate=0&mode=0&file_name=';
+
+        // ===== ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ =====
+        let scans = [];                     // массив сканов
+        let downloadQueue = [];             // очередь на загрузку
+        let isDownloading = false;
+
+        // DOM элементы
+        const loadBtn = document.getElementById('loadScansBtn');
+        const downloadSelectedBtn = document.getElementById('downloadSelectedBtn');
+        const downloadAllBtn = document.getElementById('downloadAllBtn');
+        const selectAllCheckbox = document.getElementById('selectAllCheckbox');
+        const scanListDiv = document.getElementById('scanList');
+        const statusDiv = document.getElementById('status');
+        const progressContainer = document.getElementById('progressContainer');
+        const progressBar = document.getElementById('progressBar');
+
+        // ===== ФУНКЦИИ =====
+
+        // Показать сообщение
+        function setStatus(msg, isError = false) {
+            statusDiv.textContent = msg;
+            statusDiv.className = isError ? 'status error' : 'status';
+        }
+
+        // Скачивание одного изображения по first_page_id
+        async function downloadImage(firstPageId, title) {
+            const url = IMAGE_URL_BASE + firstPageId + '.jpg';
+            const response = await fetch(url, {
+                method: 'GET',
+                // На camscanner.com Origin и Referer добавятся автоматически
+            });
+            if (!response.ok) throw new Error(`Ошибка загрузки: ${response.status}`);
+            const blob = await response.blob();
+            // Создаём ссылку для скачивания
+            const blobUrl = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            // Имя файла: первая часть названия (очищенная) или firstPageId
+            const safeTitle = title.replace(/[^a-zа-яё0-9\s]/gi, '').substring(0, 50) || firstPageId;
+            a.download = safeTitle + '.jpg';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(blobUrl);
+        }
+
+        // Рекурсивная загрузка с задержкой, чтобы не блокировать браузер
+        async function processQueue() {
+            if (downloadQueue.length === 0) {
+                isDownloading = false;
+                updateProgress(100);
+                setStatus('Все выбранные сканы загружены.');
+                downloadSelectedBtn.disabled = false;
+                downloadAllBtn.disabled = false;
+                selectAllCheckbox.disabled = false;
+                return;
+            }
+
+            const { firstPageId, title } = downloadQueue.shift();
+            try {
+                setStatus(`Скачивается: ${title}`);
+                await downloadImage(firstPageId, title);
+            } catch (err) {
+                console.error(`Ошибка при скачивании "${title}":`, err);
+                setStatus(`Ошибка при скачивании "${title}": ${err.message}`, true);
+                // Продолжаем несмотря на ошибку
+            }
+
+            // Обновляем прогресс
+            const total = scans.length;
+            const done = total - downloadQueue.length;
+            const percent = Math.round((done / total) * 100);
+            updateProgress(percent);
+
+            // Небольшая задержка между запросами (вежливость к серверу)
+            await new Promise(resolve => setTimeout(resolve, 300));
+            processQueue();
+        }
+
+        function updateProgress(percent) {
+            if (progressContainer.style.display === 'none') {
+                progressContainer.style.display = 'block';
+            }
+            progressBar.style.width = percent + '%';
+            progressBar.textContent = percent + '%';
+        }
+
+        function startDownload(items) {
+            if (isDownloading) {
+                alert('Загрузка уже выполняется, дождитесь завершения.');
+                return;
+            }
+            if (items.length === 0) {
+                setStatus('Нет сканов для загрузки.', true);
+                return;
+            }
+
+            // Формируем очередь
+            downloadQueue = items.map(scan => ({
+                firstPageId: scan.first_page_id,
+                title: scan.title || scan.file_name
+            }));
+
+            // Блокируем кнопки на время
+            isDownloading = true;
+            downloadSelectedBtn.disabled = true;
+            downloadAllBtn.disabled = true;
+            selectAllCheckbox.disabled = true;
+            updateProgress(0);
+            setStatus('Начинаем загрузку...');
+            processQueue();
+        }
+
+        // Отрисовка списка сканов
+        function renderScanList() {
+            scanListDiv.innerHTML = '';
+            if (scans.length === 0) {
+                scanListDiv.innerHTML = '<p>Список пуст.</p>';
+                return;
+            }
+
+            scans.forEach((scan, index) => {
+                const div = document.createElement('div');
+                div.className = 'scan-item';
+                div.innerHTML = `
+                    <div class="scan-info">
+                        <input type="checkbox" class="scan-checkbox" data-index="${index}">
+                        <span class="scan-title">${scan.title || 'Без названия'}</span>
+                        <span class="scan-pages">📄 ${scan.page_num} стр.</span>
+                    </div>
+                    <div class="scan-actions">
+                        <button class="download-single-btn" data-index="${index}">Скачать</button>
+                    </div>
+                `;
+                scanListDiv.appendChild(div);
+            });
+
+            // Навешиваем обработчики
+            document.querySelectorAll('.scan-checkbox').forEach(cb => {
+                cb.addEventListener('change', updateSelectAllState);
+            });
+            document.querySelectorAll('.download-single-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const idx = e.target.dataset.index;
+                    if (idx !== undefined) downloadSingle(idx);
+                });
+            });
+
+            selectAllCheckbox.disabled = false;
+            selectAllCheckbox.checked = false;
+            updateButtonsState();
+        }
+
+        // Обновление состояния чекбокса "Выделить всё"
+        function updateSelectAllState() {
+            const checkboxes = document.querySelectorAll('.scan-checkbox');
+            const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+            const noneChecked = Array.from(checkboxes).every(cb => !cb.checked);
+            selectAllCheckbox.checked = allChecked;
+            selectAllCheckbox.indeterminate = !allChecked && !noneChecked;
+            updateButtonsState();
+        }
+
+        function updateButtonsState() {
+            const anyChecked = document.querySelectorAll('.scan-checkbox:checked').length > 0;
+            downloadSelectedBtn.disabled = !anyChecked || isDownloading;
+            downloadAllBtn.disabled = isDownloading || scans.length === 0;
+        }
+
+        // Скачать один скан
+        function downloadSingle(index) {
+            const scan = scans[index];
+            if (!scan) return;
+            if (isDownloading) {
+                alert('Дождитесь окончания текущей загрузки.');
+                return;
+            }
+            startDownload([scan]);
+        }
+
+        // Скачать все отмеченные
+        function downloadSelected() {
+            const checkboxes = document.querySelectorAll('.scan-checkbox:checked');
+            const selectedIndices = Array.from(checkboxes).map(cb => parseInt(cb.dataset.index));
+            const selectedScans = selectedIndices.map(i => scans[i]).filter(Boolean);
+            startDownload(selectedScans);
+        }
+
+        // Скачать все сканы
+        function downloadAll() {
+            startDownload([...scans]);
+        }
+
+        // Загрузка списка сканов с сервера
+        async function loadScanList() {
+            loadBtn.disabled = true;
+            setStatus('Загрузка списка сканов...');
+            try {
+                const response = await fetch(LIST_URL, {
+                    method: 'GET',
+                    // На camscanner.com автоматически добавляются нужные заголовки
+                });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                if (data.status !== 0) {
+                    throw new Error(data.error_msg || 'Неизвестная ошибка API');
+                }
+                scans = data.data.doc_list || [];
+                setStatus(`Загружено сканов: ${scans.length}`);
+                renderScanList();
+            } catch (err) {
+                setStatus(`Ошибка: ${err.message}`, true);
+                console.error(err);
+            } finally {
+                loadBtn.disabled = false;
+            }
+        }
+
+        // Обработчики событий
+        loadBtn.addEventListener('click', loadScanList);
+        downloadSelectedBtn.addEventListener('click', downloadSelected);
+        downloadAllBtn.addEventListener('click', downloadAll);
+
+        selectAllCheckbox.addEventListener('change', () => {
+            const checkboxes = document.querySelectorAll('.scan-checkbox');
+            checkboxes.forEach(cb => { cb.checked = selectAllCheckbox.checked; });
+            updateButtonsState();
+        });
+
+        // Начальное состояние
+        setStatus('Готов к работе. Нажмите "Загрузить список сканов".');
+    </script>
+</body>
+</html>
